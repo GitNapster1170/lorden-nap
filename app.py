@@ -20,7 +20,7 @@ print('🚀 lorden-nap Latency Arb | $7k/day → $70k/7days')
 while True:
     markets = poll_markets()
     for m in markets:
-        if 'BTC' in m.get('question', '') and m.get('endDate', 0) > time.time()*1000:
+        if 'BTC' in m.get('question', '') and float(m.get('endDate', 0)) > time.time()*1000:
             yes_p = float(m['tokens'][0]['price'])
             if yes_p < 0.35 or (1-yes_p) < 0.35:
                 print(f'ARB: {m["question"][:30]} YES@{yes_p:.1%} | BUY $5')
