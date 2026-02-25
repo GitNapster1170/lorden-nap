@@ -4,8 +4,8 @@ import requests
 import json
 from dotenv import load_dotenv
 from py_clob_client.client import ClobClient
-from py_clob_client.constants import BUY, SELL
 from py_clob_client.clob_types import OrderArgs
+from py_clob_client.order_builder.constants import BUY  # FIXED IMPORT [web:27]
 
 load_dotenv()
 WALLET = os.getenv('WALLET', '0x75e765216a57942d738d880ffcda854d9f869080')
@@ -13,17 +13,18 @@ STRATEGY = os.getenv('STRATEGY', 'LATENCY_ARB')
 USDC_AMOUNT = int(os.getenv('USDC_AMOUNT', 5))
 PM_BASE = 'https://gamma-api.polymarket.com'
 
-# ClobClient setup - ADD YOUR PRIVATE_KEY to Railway env vars
+# ClobClient - needs PRIVATE_KEY env var
 PRIVATE_KEY = os.getenv('PRIVATE_KEY')
-if not PRIVATE_KEY:
-    print("🚨 MISSING PRIVATE_KEY env var - add to Railway!")
-else:
+clob_client = None
+if PRIVATE_KEY:
     clob_client = ClobClient(
         host="https://clob.polymarket.com",
         key=PRIVATE_KEY,
-        chain_id=137  # Polygon
+        chain_id=137
     )
-    print("✅ ClobClient READY")
+    print("✅ ClobClient LOADED")
+else:
+    print("⚠️  No PRIVATE_KEY - ARBs print only (add to Railway env)")
 
 def poll_markets():
     url = f'{PM_BASE}/markets?active=true&closed=false&limit=100'
@@ -33,15 +34,17 @@ def poll_markets():
     print(f"API error: {resp.status_code}")
     return []
 
-def clob_trade(m, side):  # side='YES' or 'NO'
-    tokens = m['tokens']
+def clob_trade(m, side):  # 'YES' or 'NO'
+    if not clob_client:
+        print("❌ ClobClient missing - set PRIVATE_KEY")
+        return
+    tokens = m.get('tokens', [])
+    if len(tokens) < 2:
+        return
     token_idx = 0 if side == 'YES' else 1
     token_id = tokens[token_idx]['token_id']
-    
-    # Edge price: 2% better
     current_p = float(tokens[token_idx]['price'])
-    edge_price = current_p * 0.98  # Buy low
-    price = int(edge_price * (2**64))  # Q64.64 [web:14]
+    price = int(current_p * 0.98 * (2**64))  # 2% edge, Q64.64 [web:14]
     
     order_args = OrderArgs(
         token_id=token_id,
@@ -51,13 +54,14 @@ def clob_trade(m, side):  # side='YES' or 'NO'
     )
     
     try:
+        # API creds auto (signs on first trade)
+        clob_client.set_api_creds(clob_client.create_or_derive_api_creds())
         response = clob_client.post_order(order_args)
-        print(f"🚀 LIVE TRADE: {response.get('order_id')} | {m['question'][:40]} {side} ${USDC_AMOUNT}")
-        return response
+        print(f"🚀 LIVE TRADE TX: {response} | {side}")
     except Exception as e:
-        print(f"Trade error: {e}")
+        print(f"Trade fail: {e}")
 
-print('🚀 lorden-nap Latency Arb | $7k/day → $70k/7days | Part 4 STEPS LIVE')
+print('🚀 lorden-nap v4 | BTC ARBs → $70k | Clob Ready')
 
 while True:
     markets = poll_markets()
@@ -65,16 +69,13 @@ while True:
     for m in markets:
         if 'BTC' in m.get('question', ''):
             tokens = m.get('tokens', [])
-            if tokens and len(tokens) > 1:
+            if len(tokens) > 1:
                 yes_p = float(tokens[0].get('yesPrice', 0.5))
                 no_p = float(tokens[1].get('noPrice', 0.5))
                 if yes_p < 0.45:
-                    print(f'ARB: {m["question"][:40]} YES@{yes_p:.1%} | BUY ${USDC_AMOUNT}')
-                    # LIVE: clob_trade(m, 'YES')  # UNCOMMENT AFTER TEST
+                    print(f'ARB YES: {m["question"][:40]} @{yes_p:.1%} | ${USDC_AMOUNT}')
+                    # LIVE: clob_trade(m, 'YES')  # Uncomment Step 2
                     arb_count += 1
-                elif no_p < 0.45:
-                    print(f'ARB: {m["question"][:40]} NO@{no_p:.1%} | BUY ${USDC_AMOUNT}')
+                if no_p < 0.45:
+                    print(f'ARB NO: {m["question"][:40]} @{no_p:.1%} | ${USDC_AMOUNT}')
                     # LIVE: clob_trade(m, 'NO')
-                    arb_count += 1
-    print(f"Scan complete: {len(markets)} markets, {arb_count} BTC edges")
-    time.sleep(30)
